@@ -1,10 +1,4 @@
 
-
-## 5) app.py (FULL end-to-end, with insights under every analytic)
-
-Copy-paste this entire code into `app.py`.
-
-```python
 import os
 import re
 import numpy as np
