@@ -429,12 +429,11 @@ elif page == "Correlation Heatmap":
 # PAGE: Regression (Dynamic)
 # ======================
 
-    elif page == "Regression":
+    
+
+   elif page == "Regression":
     st.subheader("Regression (Dynamic)")
 
-    # ---------------------------
-    # Select outcome and predictors
-    # ---------------------------
     numeric_candidates = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
     all_columns = df.columns.tolist()
 
@@ -460,61 +459,41 @@ elif page == "Correlation Heatmap":
         st.warning("Pick at least 2 predictors to run regression.")
         st.stop()
 
-    # ---------------------------
-    # Build modeling dataset
-    # ---------------------------
     model_df = df[[y_col] + X_cols].replace([np.inf, -np.inf], np.nan).dropna()
     if model_df.empty:
         st.error("No usable rows after dropping missing values. Reduce selected columns.")
         st.stop()
 
-    # One-hot encode predictors (handles categorical)
     X = pd.get_dummies(model_df[X_cols], drop_first=False)
     X = sm.add_constant(X)
     y = model_df[y_col]
 
-    # ---------------------------
-    # Fit OLS Regression
-    # ---------------------------
     try:
         model = sm.OLS(y, X).fit()
     except Exception as e:
         st.error(f"Regression failed: {e}")
         st.stop()
 
-    # ---------------------------
-    # Results table (formatted)
-    # ---------------------------
     results = pd.DataFrame({
         "feature": model.params.index,
         "coef": model.params.values,
         "p_value": model.pvalues.values
     }).sort_values("p_value")
 
-    # format to 3 decimals
     results["coef"] = results["coef"].round(3)
 
-    # show p-values as <0.001 if tiny
     def format_p(p):
-        try:
-            if p < 0.001:
-                return "<0.001"
-            return f"{p:.3f}"
-        except Exception:
-            return ""
+        if p < 0.001:
+            return "<0.001"
+        return f"{p:.3f}"
 
     results["p_value"] = results["p_value"].apply(format_p)
 
-    # ---------------------------
-    # Display results
-    # ---------------------------
     c1, c2 = st.columns([1.25, 0.75])
-
     c1.dataframe(results.head(60), use_container_width=True, height=520)
     c2.metric("R-squared", f"{model.rsquared:.3f}")
     c2.metric("Observations", f"{len(model_df):,}")
 
-    # Identify significant drivers (based on raw pvalues from model)
     sig_mask = (model.pvalues.index != "const") & (model.pvalues < 0.05)
     sig_features = model.pvalues[sig_mask].sort_values().head(8).index.tolist()
 
@@ -532,36 +511,12 @@ elif page == "Correlation Heatmap":
         "GTM implication: use statistically meaningful drivers to justify pricing, messaging, and channel investments."
     )
 
-    # ---------------------------
-    # Actual vs Predicted (trend line)
-    # ---------------------------
-    st.markdown("### Linear: Actual vs Predicted (with trend)")
-
-    pred = model.predict(X)
-    fit_df = pd.DataFrame({"actual": y.values, "predicted": pred.values})
-
-    figfit = px.scatter(
-        fit_df,
-        x="predicted",
-        y="actual",
-        trendline="ols",
-        title="Actual vs Predicted"
-    )
-    figfit.update_layout(height=450, xaxis_title="Predicted", yaxis_title="Actual")
-    st.plotly_chart(figfit, use_container_width=True)
-
-    st.caption(
-        "Insight: The closer points align to the trend, the more the model explains the outcome. "
-        "GTM implication: stronger fit increases confidence in the driver story for GTM decisions."
-    )
-
-  # Linear: Actual vs Predicted
     st.markdown("### Linear: Actual vs Predicted (with trend)")
     pred = model.predict(X)
     fit_df = pd.DataFrame({"actual": y.values, "predicted": pred.values})
 
     figfit = px.scatter(fit_df, x="predicted", y="actual", trendline="ols", title="Actual vs Predicted")
-    figfit.update_layout(height=450)
+    figfit.update_layout(height=450, xaxis_title="Predicted", yaxis_title="Actual")
     st.plotly_chart(figfit, use_container_width=True)
 
     st.caption(
