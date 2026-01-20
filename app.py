@@ -20,7 +20,8 @@ st.set_page_config(page_title="IOTA Water UAE | GTM Dashboard", layout="wide")
 st.title("IOTA Water UAE | GTM Analytics Dashboard")
 st.caption("Dynamic GTM insights: KPIs, correlation, regression, STP segmentation, perceptual maps, and line charts.")
 
-DATA_PATH = "data/gip_final_data.csv"
+DATA_PATH = "data/gip final data.csv"
+
 
 
 # ======================
