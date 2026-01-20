@@ -1,0 +1,8 @@
+iota-uae-gtm-dashboard/
+  app.py
+  requirements.txt
+  runtime.txt
+  README.md
+  data/
+    gip final data.csv
+    .gitkeep
