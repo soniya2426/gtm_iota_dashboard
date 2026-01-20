@@ -13,19 +13,19 @@ from sklearn.decomposition import PCA
 import statsmodels.api as sm
 
 
-# ======================================================
-# CONFIG
-# ======================================================
+# ======================
+# App config
+# ======================
 st.set_page_config(page_title="IOTA Water UAE | GTM Dashboard", layout="wide")
 st.title("IOTA Water UAE | GTM Analytics Dashboard")
-st.caption("Executive-ready GTM insights: KPIs, correlation, regression, STP segmentation, and perceptual mapping.")
+st.caption("Dynamic GTM insights: KPIs, correlation, regression, STP segmentation, perceptual maps, and line charts.")
 
-DATA_PATH = "data/gip final data.csv"
+DATA_PATH = "data/gip_final_data.csv"
 
 
-# ======================================================
-# LOAD DATA (local repo path first)
-# ======================================================
+# ======================
+# Load data
+# ======================
 @st.cache_data(show_spinner=False)
 def load_data(path: str):
     if not os.path.exists(path):
@@ -37,18 +37,18 @@ if df_raw is None:
     st.error(
         f"Dataset not found at `{DATA_PATH}`.\n\n"
         "Fix:\n"
-        "1) Create folder `data/` in your repo\n"
-        "2) Upload CSV named exactly: `gip final data.csv`\n"
-        "3) Redeploy Streamlit Cloud"
+        "1) Create `data/` folder in repo\n"
+        "2) Upload CSV named exactly `gip_final_data.csv`\n"
+        "3) Reboot/redeploy in Streamlit Cloud"
     )
     st.stop()
 
 
-# ======================================================
-# HELPERS
-# ======================================================
+# ======================
+# Helpers
+# ======================
 def standardize_col(col: str) -> str:
-    col = str(col).replace("\ufeff", "")  # remove BOM
+    col = str(col).replace("\ufeff", "")
     col = col.strip().lower()
     col = re.sub(r"[^\w\s]", " ", col)
     col = re.sub(r"\s+", "_", col)
@@ -62,7 +62,6 @@ def mode_impute(s: pd.Series) -> pd.Series:
     return s.fillna(s.dropna().mode().iloc[0]) if not s.dropna().empty else s
 
 def find_col(cols, candidates):
-    """Return first matching column from standardized candidates."""
     for c in candidates:
         if c in cols:
             return c
@@ -97,7 +96,6 @@ def freq_to_score(x) -> float:
     if pd.isna(x):
         return np.nan
     s = str(x).strip().lower()
-
     if "more than once a week" in s:
         return 5
     if "once a week" in s:
@@ -122,19 +120,15 @@ def yesno_to_bin(x) -> float:
         return 0.0
     return np.nan
 
-def split_brands(x) -> list:
+def split_multi(x) -> list:
     if pd.isna(x):
         return []
-    return [b.strip() for b in str(x).split(",") if b.strip()]
+    return [i.strip() for i in str(x).split(",") if i.strip()]
 
 def encode_for_modeling(df_in: pd.DataFrame, cols: list) -> pd.DataFrame:
-    """
-    Numeric columns -> numeric (median impute)
-    Categorical columns -> mode impute + one-hot encoding
-    """
     X = df_in[cols].copy()
 
-    # Try numeric coercion if column is mostly numeric in text
+    # numeric coercion for mostly-numeric object columns
     for c in X.columns:
         if X[c].dtype == "object":
             coerced = pd.to_numeric(X[c], errors="coerce")
@@ -155,20 +149,20 @@ def encode_for_modeling(df_in: pd.DataFrame, cols: list) -> pd.DataFrame:
     return X
 
 
-# ======================================================
-# CLEAN + STANDARDIZE
-# ======================================================
+# ======================
+# Clean data
+# ======================
 df = df_raw.copy()
 df.columns = [standardize_col(c) for c in df.columns]
 
-# Remove typical junk ID columns
+# drop common junk index cols
 for junk in ["column1", "unnamed_0", "unnamed_1"]:
     if junk in df.columns:
         df = df.drop(columns=[junk], errors="ignore")
 
 cols = df.columns.tolist()
 
-# Detect key columns (robust)
+# detect spend/freq columns (if present)
 col_spend = find_col(cols, [
     "what_is_your_average_monthly_spent_on_water_in_a_month",
     "average_monthly_spent_on_water",
@@ -176,8 +170,7 @@ col_spend = find_col(cols, [
 ])
 col_freq = find_col(cols, [
     "how_often_do_you_purchase_packaged_drinking_water",
-    "purchase_frequency",
-    "how_often_purchase_packaged_drinking_water"
+    "purchase_frequency"
 ])
 col_eatout = find_col(cols, [
     "how_often_do_you_eat_out",
@@ -189,12 +182,10 @@ col_buy_eatout = find_col(cols, [
 ])
 col_channel = find_col(cols, [
     "where_do_you_usually_buy_bottled_water",
-    "purchase_channel",
-    "where_do_you_buy_bottled_water"
+    "purchase_channel"
 ])
 col_pack = find_col(cols, [
     "size_of_bottled_water",
-    "what_size_of_bottled_water_do_you_buy_most_often",
     "pack_size"
 ])
 col_awareness = find_col(cols, [
@@ -207,33 +198,28 @@ col_brand_buy = find_col(cols, [
     "most_purchased_brand"
 ])
 
-# Attribute ratings (core perceptual drivers)
-attribute_map = {
-    "value_for_money": ["value_for_money", "value_for_money_in_purchasing_bottled_water", "value_for_money_rating"],
-    "packaging_type": ["packaging_type", "packaging_type_in_purchasing_bottled_water"],
-    "added_benefits": ["added_benefits", "added_benefits_like_alkaline_zero_sodium_added_minerals"],
-    "source_of_water": ["source_of_water", "source_of_water_in_purchasing_bottled_water"],
-    "availability": ["availability", "availability_in_purchasing_bottled_water"],
-    "taste": ["taste", "taste_in_purchasing_bottled_water"],
-    "brand_name": ["brand_name", "brand_name_in_purchasing_bottled_water"],
-    "attractive_promotions": ["attractive_promotions", "attractive_promotions_in_purchasing_bottled_water"],
-}
+# engineered numeric features (only if source column exists)
+if col_spend:
+    df["monthly_spend_aed"] = df[col_spend].apply(spend_to_aed)
+else:
+    df["monthly_spend_aed"] = np.nan
 
-attribute_cols = []
-canonical_attr = {}
-for canon, cand_list in attribute_map.items():
-    found = find_col(cols, cand_list)
-    if found:
-        canonical_attr[canon] = found
-        attribute_cols.append(found)
+if col_freq:
+    df["purchase_freq_score"] = df[col_freq].apply(freq_to_score)
+else:
+    df["purchase_freq_score"] = np.nan
 
-# Feature engineering (numeric proxies)
-df["monthly_spend_aed"] = df[col_spend].apply(spend_to_aed) if col_spend else np.nan
-df["purchase_freq_score"] = df[col_freq].apply(freq_to_score) if col_freq else np.nan
-df["eatout_freq_score"] = df[col_eatout].apply(freq_to_score) if col_eatout else np.nan
-df["buys_water_when_eating_out"] = df[col_buy_eatout].apply(yesno_to_bin) if col_buy_eatout else np.nan
+if col_eatout:
+    df["eatout_freq_score"] = df[col_eatout].apply(freq_to_score)
+else:
+    df["eatout_freq_score"] = np.nan
 
-# Global impute
+if col_buy_eatout:
+    df["buys_water_when_eating_out"] = df[col_buy_eatout].apply(yesno_to_bin)
+else:
+    df["buys_water_when_eating_out"] = np.nan
+
+# impute
 num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
 cat_cols = [c for c in df.columns if c not in num_cols]
 for c in num_cols:
@@ -241,10 +227,13 @@ for c in num_cols:
 for c in cat_cols:
     df[c] = mode_impute(df[c])
 
+numeric_candidates = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+all_columns = df.columns.tolist()
 
-# ======================================================
-# SIDEBAR NAV
-# ======================================================
+
+# ======================
+# Sidebar navigation + global filters
+# ======================
 with st.sidebar:
     st.header("Navigation")
     page = st.radio(
@@ -265,167 +254,159 @@ with st.sidebar:
     st.code(DATA_PATH)
 
 
-# ======================================================
-# PAGE: DATA OVERVIEW
-# ======================================================
+# ======================
+# PAGE: Data Overview
+# ======================
 if page == "Data Overview":
     st.subheader("Data Overview")
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
     c1.metric("Rows", f"{df.shape[0]:,}")
     c2.metric("Columns", f"{df.shape[1]:,}")
-    c3.metric("Attribute drivers detected", f"{len(attribute_cols):,}")
-    c4.metric("Has brand column?", "Yes" if col_brand_buy else "No")
+    c3.metric("Numeric columns", f"{len(numeric_candidates):,}")
 
-    st.dataframe(df.head(25), use_container_width=True)
+    with st.expander("Preview data"):
+        st.dataframe(df.head(30), use_container_width=True)
 
     st.caption(
-        "Insight: This confirms the app can read the dataset correctly and the key GTM variables are available. "
-        "GTM implication: if this page loads cleanly, the rest of the dashboard will be stable in Streamlit Cloud."
+        "Insight: Confirms the dataset is loaded and cleaned successfully. "
+        "GTM implication: stable loading means the rest of the analytics will run reliably on Streamlit Cloud."
     )
 
 
-# ======================================================
-# PAGE: KPI METRICS (EXECUTIVE SNAPSHOT)
-# ======================================================
+# ======================
+# PAGE: KPI Metrics (Dynamic)
+# ======================
 elif page == "KPI Metrics":
     st.subheader("KPI Metrics (Executive Snapshot)")
 
-    # KPI tiles
-    avg_spend = float(df["monthly_spend_aed"].mean())
-    med_spend = float(df["monthly_spend_aed"].median())
-    heavy_spend_cut = float(df["monthly_spend_aed"].quantile(0.75))
-    heavy_spend_pct = float((df["monthly_spend_aed"] >= heavy_spend_cut).mean() * 100)
-
-    avg_freq = float(df["purchase_freq_score"].mean())
-    weekly_plus_pct = float((df["purchase_freq_score"] >= 4).mean() * 100)
-
-    eatout_buy_pct = float(df["buys_water_when_eating_out"].mean() * 100)
+    # Core KPI tiles (safe even if spend/freq missing)
+    avg_spend = float(df["monthly_spend_aed"].mean()) if "monthly_spend_aed" in df.columns else np.nan
+    med_spend = float(df["monthly_spend_aed"].median()) if "monthly_spend_aed" in df.columns else np.nan
+    avg_freq = float(df["purchase_freq_score"].mean()) if "purchase_freq_score" in df.columns else np.nan
+    eatout_buy_pct = float(df["buys_water_when_eating_out"].mean() * 100) if "buys_water_when_eating_out" in df.columns else np.nan
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Avg Monthly Spend (AED, proxy)", f"{avg_spend:,.0f}")
-    c2.metric("Median Monthly Spend (AED, proxy)", f"{med_spend:,.0f}")
-    c3.metric("Heavy Buyers (Top 25%)", f"{heavy_spend_pct:.1f}%")
-    c4.metric("Weekly+ Buyers", f"{weekly_plus_pct:.1f}%")
+    c1.metric("Avg Monthly Spend (AED proxy)", f"{avg_spend:,.0f}" if not np.isnan(avg_spend) else "N/A")
+    c2.metric("Median Monthly Spend (AED proxy)", f"{med_spend:,.0f}" if not np.isnan(med_spend) else "N/A")
+    c3.metric("Avg Purchase Frequency Score", f"{avg_freq:.2f}" if not np.isnan(avg_freq) else "N/A")
+    c4.metric("% Buy Water While Eating Out", f"{eatout_buy_pct:.1f}%" if not np.isnan(eatout_buy_pct) else "N/A")
 
     st.caption(
-        "Insight: Spend and frequency quickly separate ‘premium potential’ from ‘volume play’. "
-        "GTM implication: if heavy buyers are sizable, premium positioning + higher-margin packs becomes viable."
+        "Insight: These KPIs summarize category intensity (frequency), value potential (spend), and out-of-home opportunity. "
+        "GTM implication: they guide pricing tier, channel priorities, and whether HoReCa is a real growth lever."
     )
 
     st.divider()
 
-    # Channel share
+    # Dynamic KPI chart selector (so charts adapt when attributes change)
+    st.markdown("### KPI Trend Lines (choose the metric + axis)")
+    x_axis = st.selectbox(
+        "X axis (must be numeric or ordered numeric proxy)",
+        options=[c for c in numeric_candidates if c != "monthly_spend_aed"] + ["purchase_freq_score"],
+        index=0
+    )
+    y_metric = st.selectbox(
+        "Y metric (numeric)",
+        options=[c for c in numeric_candidates if c != x_axis] + ["monthly_spend_aed"],
+        index=0
+    )
+
+    tmp = df[[x_axis, y_metric]].copy()
+    tmp = tmp.dropna()
+    if tmp.empty:
+        st.info("Not enough data for this selection.")
+    else:
+        tmp = tmp.groupby(x_axis)[y_metric].mean().reset_index().sort_values(x_axis)
+        fig = px.line(tmp, x=x_axis, y=y_metric, markers=True, title=f"Average {y_metric} vs {x_axis}")
+        fig.update_layout(height=420)
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption(
+            "Insight: This line shows how the chosen outcome changes across the chosen axis. "
+            "GTM implication: use this to identify high-value bands and target them with pricing + channel tactics."
+        )
+
+    # Optional channel and pack charts
+    colA, colB = st.columns(2)
     if col_channel:
         vc = df[col_channel].value_counts(normalize=True).reset_index()
         vc.columns = ["channel", "share"]
-        fig = px.bar(vc, x="channel", y="share", title="Preferred Purchase Channel Share")
-        fig.update_layout(height=380, yaxis_tickformat=".0%")
-        st.plotly_chart(fig, use_container_width=True)
-        st.caption(
-            "Insight: The dominant channel tells you where consumer demand already lives. "
-            "GTM implication: prioritize distribution and promotions in the top channel before expanding."
+        figc = px.bar(vc, x="channel", y="share", title="Preferred Purchase Channel Share")
+        figc.update_layout(height=400, yaxis_tickformat=".0%")
+        colA.plotly_chart(figc, use_container_width=True)
+        colA.caption(
+            "Insight: Channel share indicates where demand already exists. "
+            "GTM implication: win the top channel first to maximize early traction."
         )
     else:
-        st.info("Channel column not found in this dataset export.")
+        colA.info("Channel column not detected in dataset.")
 
-    # Pack size share
     if col_pack:
-        vc2 = df[col_pack].value_counts(normalize=True).reset_index()
-        vc2.columns = ["pack_size", "share"]
-        fig2 = px.bar(vc2, x="pack_size", y="share", title="Preferred Pack Size Share")
-        fig2.update_layout(height=380, yaxis_tickformat=".0%")
-        st.plotly_chart(fig2, use_container_width=True)
+        vp = df[col_pack].value_counts(normalize=True).reset_index()
+        vp.columns = ["pack_size", "share"]
+        figp = px.bar(vp, x="pack_size", y="share", title="Preferred Pack Size Share")
+        figp.update_layout(height=400, yaxis_tickformat=".0%")
+        colB.plotly_chart(figp, use_container_width=True)
+        colB.caption(
+            "Insight: Pack size preference signals usage context (single-serve vs stock-up). "
+            "GTM implication: align SKU mix to channel economics."
+        )
+    else:
+        colB.info("Pack size column not detected in dataset.")
+
+
+# ======================
+# PAGE: Consumer Insights
+# ======================
+elif page == "Consumer Insights":
+    st.subheader("Consumer Insights")
+
+    if col_freq:
+        fig = px.histogram(df, x=col_freq, title="Purchase Frequency Distribution")
+        fig.update_layout(height=380)
+        st.plotly_chart(fig, use_container_width=True)
         st.caption(
-            "Insight: Pack size preference signals whether the market is ‘grab-and-go’ or ‘stock-up’. "
-            "GTM implication: match SKUs to channel economics (bulk online vs single-serve convenience)."
+            "Insight: Frequency shows how habitual bottled water is for consumers. "
+            "GTM implication: high habituality supports subscriptions and bulk packs."
         )
 
-    # Top purchase drivers
-    if attribute_cols:
-        means = df[attribute_cols].mean().sort_values(ascending=False).reset_index()
-        means.columns = ["driver", "avg_rating"]
-        fig3 = px.bar(means, x="avg_rating", y="driver", orientation="h", title="Top Purchase Drivers (Average Rating)")
-        fig3.update_layout(height=420)
-        st.plotly_chart(fig3, use_container_width=True)
-        st.caption(
-            "Insight: These are the category decision criteria consumers actually use. "
-            "GTM implication: your packaging + ads should scream the top 2–3 drivers, not everything at once."
-        )
-
-    # Brand awareness vs purchase
-    cA, cB = st.columns(2)
     if col_awareness:
         all_aw = []
         for x in df[col_awareness].tolist():
-            all_aw.extend(split_brands(x))
-        aw = pd.Series(all_aw).value_counts().head(12).reset_index()
-        aw.columns = ["brand", "mentions"]
-        figA = px.bar(aw, x="brand", y="mentions", title="Top Brand Awareness (Mentions)")
-        figA.update_layout(height=420)
-        cA.plotly_chart(figA, use_container_width=True)
-        cA.caption(
-            "Insight: Awareness is mindshare, not market share. "
-            "GTM implication: if incumbents dominate awareness, IOTA needs a sharp wedge message to break through."
-        )
-    else:
-        cA.info("Brand awareness column not found.")
+            all_aw.extend(split_multi(x))
+        if all_aw:
+            aw = pd.Series(all_aw).value_counts().head(12).reset_index()
+            aw.columns = ["brand", "mentions"]
+            figA = px.bar(aw, x="brand", y="mentions", title="Top Brand Awareness (mentions)")
+            figA.update_layout(height=420)
+            st.plotly_chart(figA, use_container_width=True)
+            st.caption(
+                "Insight: Awareness shows which brands are already in the consumer consideration set. "
+                "GTM implication: IOTA must differentiate strongly where incumbents dominate mindshare."
+            )
 
     if col_brand_buy:
         buy = df[col_brand_buy].astype(str).value_counts().head(12).reset_index()
         buy.columns = ["brand", "respondents"]
         figB = px.bar(buy, x="brand", y="respondents", title="Most Frequently Purchased Brand")
         figB.update_layout(height=420)
-        cB.plotly_chart(figB, use_container_width=True)
-        cB.caption(
-            "Insight: ‘Most purchased’ is the competitive reality check. "
-            "GTM implication: your first distribution and messaging must beat these brands where it matters (shelf, online, restaurants)."
-        )
-    else:
-        cB.info("Most-purchased brand column not found.")
-
-
-# ======================================================
-# PAGE: CONSUMER INSIGHTS (BEHAVIOR)
-# ======================================================
-elif page == "Consumer Insights":
-    st.subheader("Consumer Insights (Behavior + Brand)")
-
-    # Frequency distribution
-    if col_freq:
-        fig = px.histogram(df, x=col_freq, title="Purchase Frequency Distribution")
-        fig.update_layout(height=380)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(figB, use_container_width=True)
         st.caption(
-            "Insight: Frequency tells you whether water is treated as a staple (high repeat) or occasional add-on. "
-            "GTM implication: staples reward subscriptions, bulk packs, and always-available distribution."
-        )
-
-    # Eat-out behavior
-    if col_buy_eatout:
-        fig2 = px.histogram(df, x=col_buy_eatout, title="Do Consumers Buy Water While Eating Out?")
-        fig2.update_layout(height=320)
-        st.plotly_chart(fig2, use_container_width=True)
-        st.caption(
-            "Insight: Out-of-home purchase is a separate battleground with different economics and brand cues. "
-            "GTM implication: if ‘Yes’ is high, restaurant/café placements can accelerate trial and premium perception."
+            "Insight: Purchase preference shows who is actually winning wallet share. "
+            "GTM implication: benchmark IOTA against top-purchased competitors for pricing + claims."
         )
 
 
-# ======================================================
-# PAGE: CORRELATION HEATMAP
-# ======================================================
+# ======================
+# PAGE: Correlation Heatmap (Dynamic)
+# ======================
 elif page == "Correlation Heatmap":
-    st.subheader("Correlation Heatmap (Drivers + Spend/Frequency)")
-
-    numeric_candidates = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-    default_heat = [c for c in (attribute_cols + ["monthly_spend_aed", "purchase_freq_score", "eatout_freq_score"]) if c in numeric_candidates]
-    default_heat = default_heat if len(default_heat) >= 3 else numeric_candidates[:10]
+    st.subheader("Correlation Heatmap (Dynamic)")
 
     selected = st.multiselect(
-        "Select numeric columns for correlation",
+        "Choose numeric attributes for correlation heatmap",
         options=numeric_candidates,
-        default=default_heat
+        default=numeric_candidates[:12] if len(numeric_candidates) >= 12 else numeric_candidates
     )
 
     if len(selected) < 3:
@@ -438,31 +419,31 @@ elif page == "Correlation Heatmap":
     st.plotly_chart(fig, use_container_width=True)
 
     st.caption(
-        "Insight: Correlation shows which preferences move together in consumers’ minds. "
-        "GTM implication: build positioning around coherent bundles (e.g., taste + source), not random feature lists."
+        "Insight: Correlation shows which attributes move together in consumer perception. "
+        "GTM implication: build positioning around coherent bundles of drivers, not scattered messages."
     )
 
 
-# ======================================================
-# PAGE: REGRESSION
-# ======================================================
+# ======================
+# PAGE: Regression (Dynamic)
+# ======================
 elif page == "Regression":
-    st.subheader("Regression (Drivers of Spend / WTP Proxy)")
+    st.subheader("Regression (Dynamic)")
 
-    numeric_outcomes = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-    if "monthly_spend_aed" not in numeric_outcomes:
-        st.error("monthly_spend_aed not available. Check spend mapping in dataset.")
-        st.stop()
+    y_col = st.selectbox(
+        "Choose outcome variable (dependent)",
+        options=numeric_candidates,
+        index=numeric_candidates.index("monthly_spend_aed") if "monthly_spend_aed" in numeric_candidates else 0
+    )
 
-    y_col = st.selectbox("Outcome (Dependent variable)", numeric_outcomes, index=numeric_outcomes.index("monthly_spend_aed"))
+    X_cols = st.multiselect(
+        "Choose predictor variables (independent) — mix numeric + categorical allowed",
+        options=all_columns,
+        default=[c for c in ["purchase_freq_score", "eatout_freq_score", "buys_water_when_eating_out"] if c in all_columns]
+    )
 
-    default_X = attribute_cols + ["purchase_freq_score", "eatout_freq_score", "buys_water_when_eating_out"]
-    default_X = [c for c in default_X if c in df.columns]
-
-    X_cols = st.multiselect("Drivers (Independent variables)", df.columns.tolist(), default=default_X)
-
-    if len(X_cols) < 3:
-        st.warning("Select at least 3 driver columns.")
+    if len(X_cols) < 2:
+        st.warning("Pick at least 2 predictors.")
         st.stop()
 
     model_df = df[[y_col] + X_cols].replace([np.inf, -np.inf], np.nan).dropna()
@@ -483,7 +464,7 @@ elif page == "Regression":
     }).sort_values("p_value")
 
     c1, c2 = st.columns([1.25, 0.75])
-    c1.dataframe(results.head(50), use_container_width=True, height=520)
+    c1.dataframe(results.head(60), use_container_width=True, height=520)
     c2.metric("R-squared", f"{model.rsquared:.3f}")
     c2.metric("Observations", f"{len(model_df):,}")
 
@@ -497,43 +478,50 @@ elif page == "Regression":
             c2.write(f"- {direction} `{r['feature']}` (coef={r['coef']:.2f})")
 
     st.caption(
-        "Insight: Regression highlights which drivers are most associated with higher spend (a WTP proxy). "
-        "GTM implication: prioritize significant drivers in pricing, packaging claims, and channel strategy."
+        "Insight: Regression quantifies which selected attributes are associated with the selected outcome. "
+        "GTM implication: use statistically meaningful drivers to justify pricing, messaging, and channel investments."
+    )
+
+    # Linear: Actual vs Predicted
+    st.markdown("### Linear: Actual vs Predicted (with trend)")
+    pred = model.predict(X)
+    fit_df = pd.DataFrame({"actual": y.values, "predicted": pred.values})
+
+    figfit = px.scatter(fit_df, x="predicted", y="actual", trendline="ols", title="Actual vs Predicted")
+    figfit.update_layout(height=450)
+    st.plotly_chart(figfit, use_container_width=True)
+
+    st.caption(
+        "Insight: The closer points align to the trend, the more the model explains the outcome. "
+        "GTM implication: stronger fit increases confidence in the driver story for GTM decisions."
     )
 
 
-# ======================================================
-# PAGE: STP SEGMENTATION (KMeans, selectable attributes)
-# ======================================================
+# ======================
+# PAGE: Segmentation (Dynamic KMeans)
+# ======================
 elif page == "Segmentation (STP)":
-    st.subheader("STP Segmentation (KMeans Clustering)")
+    st.subheader("STP Segmentation (KMeans)")
 
-    st.markdown(
-        "Choose any attributes you want (demographics, behavior, perceptions). "
-        "Categorical variables are automatically one-hot encoded."
+    seg_cols = st.multiselect(
+        "Choose attributes for clustering (numeric + categorical allowed)",
+        options=all_columns,
+        default=[c for c in ["monthly_spend_aed", "purchase_freq_score", "eatout_freq_score", "buys_water_when_eating_out"] if c in all_columns]
     )
-
-    default_seg = attribute_cols + ["monthly_spend_aed", "purchase_freq_score", "eatout_freq_score", "buys_water_when_eating_out"]
-    default_seg = [c for c in default_seg if c in df.columns]
-
-    seg_cols = st.multiselect("Segmentation attributes", df.columns.tolist(), default=default_seg)
     if len(seg_cols) < 4:
-        st.warning("Pick at least 4 attributes for stable segmentation.")
+        st.warning("Pick at least 4 attributes for stable clustering.")
         st.stop()
 
     k = st.slider("Number of segments (K)", 3, 8, 4)
 
-    X = encode_for_modeling(df, seg_cols)
-    Xs = StandardScaler().fit_transform(X)
+    Xseg = encode_for_modeling(df, seg_cols)
+    Xs = StandardScaler().fit_transform(Xseg)
 
     km = KMeans(n_clusters=k, random_state=42, n_init=25)
     df_seg = df.copy()
     df_seg["segment"] = km.fit_predict(Xs)
 
-    # Save for positioning page reuse
-    st.session_state["df_seg"] = df_seg
-    st.session_state["seg_cols"] = seg_cols
-    st.session_state["k"] = k
+    st.session_state["df_seg"] = df_seg  # reuse in perceptual mapping
 
     sizes = df_seg["segment"].value_counts().sort_index().reset_index()
     sizes.columns = ["segment", "respondents"]
@@ -545,97 +533,98 @@ elif page == "Segmentation (STP)":
     c2.plotly_chart(fig, use_container_width=True)
 
     st.caption(
-        "Insight: Segment size shows where scale lives and where niche opportunities exist. "
-        "GTM implication: pick 1–2 primary segments first; spreading the brand across all segments weakens positioning."
+        "Insight: Segment sizes show where scale lives vs niche opportunities. "
+        "GTM implication: pick 1–2 segments to target first to keep positioning sharp."
     )
 
-    # Numeric profile table for selected columns
-    prof_cols = [c for c in seg_cols if pd.api.types.is_numeric_dtype(df_seg[c])]
-    if prof_cols:
-        profile = df_seg.groupby("segment")[prof_cols].mean().reset_index()
-        st.markdown("### Segment profile (numeric averages)")
-        st.dataframe(profile, use_container_width=True, height=420)
+    # Segment profile lines (dynamic on chosen numeric columns)
+    num_in_seg = [c for c in seg_cols if pd.api.types.is_numeric_dtype(df_seg[c])]
+    if len(num_in_seg) >= 3:
+        st.markdown("### Line: Segment Profiles Across Selected Numeric Attributes")
+        prof = df_seg.groupby("segment")[num_in_seg].mean().reset_index()
+        prof_long = prof.melt(id_vars="segment", var_name="attribute", value_name="avg_value")
+
+        figline = px.line(prof_long, x="attribute", y="avg_value", color="segment", markers=True,
+                          title="Segment Profiles (Selected Numeric Attributes)")
+        figline.update_layout(height=520, xaxis_title="Attribute", yaxis_title="Average")
+        st.plotly_chart(figline, use_container_width=True)
+
         st.caption(
-            "Insight: Segment profiles show what each group values and how they behave. "
-            "GTM implication: translate profiles into targeted messaging (drivers) and targeted distribution (channels)."
+            "Insight: Each segment has a distinct profile across your selected attributes. "
+            "GTM implication: use the highest-scoring drivers per segment to tailor messaging and offers."
         )
 
-    # Download segmented file
     with st.expander("Download segmented dataset"):
         csv = df_seg.to_csv(index=False).encode("utf-8")
         st.download_button("Download CSV with segment labels", csv, file_name="iota_segmented_output.csv", mime="text/csv")
 
 
-# ======================================================
-# PAGE: POSITIONING & PERCEPTUAL MAPPING (PCA + biplot + clustering overlay)
-# ======================================================
+# ======================
+# PAGE: Perceptual Mapping (Dynamic PCA + overlay)
+# ======================
 elif page == "Positioning & Perceptual Mapping":
-    st.subheader("Positioning & Perceptual Mapping")
+    st.subheader("Perceptual Mapping (Dynamic PCA)")
 
-    if not attribute_cols or len(attribute_cols) < 4:
-        st.error(
-            "Not enough attribute rating columns detected to create a strong perceptual map.\n"
-            "Make sure your dataset includes the 1–5 driver ratings like taste, source, value, etc."
-        )
-        st.stop()
-
-    st.markdown(
-        "This is a **data-driven perceptual map** using PCA over your attribute ratings. "
-        "It also includes a biplot (attribute arrows) so the axes are interpretable."
+    st.write(
+        "Choose numeric attributes for PCA. PCA compresses many attributes into 2 perceptual axes. "
+        "Optional: overlay KMeans clusters and show centroids."
     )
 
-    # PCA on attributes
-    attrs = df[attribute_cols].copy()
-    scaler = StandardScaler()
-    attrs_scaled = scaler.fit_transform(attrs)
+    pca_cols = st.multiselect(
+        "Choose numeric attributes for PCA (at least 4 recommended)",
+        options=numeric_candidates,
+        default=numeric_candidates[:8] if len(numeric_candidates) >= 8 else numeric_candidates
+    )
+
+    if len(pca_cols) < 3:
+        st.warning("Select at least 3 numeric attributes for PCA.")
+        st.stop()
+
+    Xp = df[pca_cols].copy().replace([np.inf, -np.inf], np.nan).dropna()
+    if Xp.empty:
+        st.error("No usable rows for PCA after dropping missing values. Reduce columns.")
+        st.stop()
+
+    Xps = StandardScaler().fit_transform(Xp)
 
     pca = PCA(n_components=2, random_state=42)
-    coords = pca.fit_transform(attrs_scaled)
+    coords = pca.fit_transform(Xps)
 
-    df_map = df.copy()
+    df_map = df.loc[Xp.index].copy()
     df_map["pc1"] = coords[:, 0]
     df_map["pc2"] = coords[:, 1]
 
     explained = pca.explained_variance_ratio_
     st.caption(f"PCA variance explained: PC1={explained[0]*100:.1f}% | PC2={explained[1]*100:.1f}%")
 
-    overlay = st.checkbox("Overlay segments (KMeans) on perceptual map", value=True)
+    overlay = st.checkbox("Overlay KMeans clusters on the PCA map", value=True)
     if overlay:
-        k = st.slider("K for overlay segmentation", 3, 8, st.session_state.get("k", 4))
+        k = st.slider("K (overlay)", 3, 8, 4)
         km = KMeans(n_clusters=k, random_state=42, n_init=25)
-        df_map["segment"] = km.fit_predict(attrs_scaled)
+        df_map["segment"] = km.fit_predict(Xps)
         color_col = "segment"
     else:
         color_col = None
 
-    # Consumer perceptual map
-    fig = px.scatter(
-        df_map,
-        x="pc1",
-        y="pc2",
-        color=color_col,
-        opacity=0.75,
-        title="Perceptual Map (PCA on attribute ratings)"
-    )
+    fig = px.scatter(df_map, x="pc1", y="pc2", color=color_col, opacity=0.75,
+                     title="Perceptual Map (PCA on selected attributes)")
     fig.update_layout(height=650, xaxis_title="Perceptual Axis 1 (PC1)", yaxis_title="Perceptual Axis 2 (PC2)")
     st.plotly_chart(fig, use_container_width=True)
 
     st.caption(
-        "Insight: PCA reveals how consumers cluster across all purchase drivers simultaneously. "
-        "GTM implication: choose a target cluster and position IOTA to own that bundle of preferences."
+        "Insight: This map shows how consumers spread across the preference space defined by your selected attributes. "
+        "GTM implication: target a cluster and position IOTA to dominate the attributes driving that cluster."
     )
 
-    # PCA biplot with loadings (attribute arrows)
-    st.markdown("### Biplot (What do PC1 and PC2 actually mean?)")
-    loadings = pca.components_.T  # shape: [features, pcs]
-    loading_df = pd.DataFrame(loadings, index=attribute_cols, columns=["pc1_loading", "pc2_loading"]).reset_index()
+    # Biplot arrows (loadings)
+    st.markdown("### Biplot: Attribute Loadings (what defines the axes?)")
+    loadings = pca.components_.T
+    loading_df = pd.DataFrame(loadings, index=pca_cols, columns=["pc1_loading", "pc2_loading"]).reset_index()
     loading_df.rename(columns={"index": "attribute"}, inplace=True)
 
-    # Scale arrows for visibility
-    arrow_scale = st.slider("Arrow scale (for visibility)", 2, 12, 6)
+    arrow_scale = st.slider("Arrow scale (visibility)", 2, 14, 7)
 
     fig2 = go.Figure()
-    # Add arrows
     for _, r in loading_df.iterrows():
         fig2.add_trace(
             go.Scatter(
@@ -644,13 +633,11 @@ elif page == "Positioning & Perceptual Mapping":
                 mode="lines+markers+text",
                 text=["", r["attribute"]],
                 textposition="top center",
-                name=r["attribute"],
                 showlegend=False
             )
         )
-
     fig2.update_layout(
-        title="Attribute Loadings (Direction of each driver on the perceptual axes)",
+        title="Attribute loadings on PC1 and PC2",
         height=650,
         xaxis_title="PC1 loading",
         yaxis_title="PC2 loading"
@@ -658,55 +645,24 @@ elif page == "Positioning & Perceptual Mapping":
     st.plotly_chart(fig2, use_container_width=True)
 
     st.caption(
-        "Insight: Arrow directions show which attributes define the perceptual axes. "
-        "GTM implication: if your target segment is strong along certain arrows, those should dominate your messaging and packaging cues."
+        "Insight: Arrows show which attributes define each perceptual axis and in what direction. "
+        "GTM implication: align IOTA’s messaging with the arrows that point toward your target zone."
     )
 
-    # Segment centroid map (if clustering enabled)
+    # Centroids if overlay
     if overlay and "segment" in df_map.columns:
-        st.markdown("### Segment centroid map (executive-friendly)")
+        st.markdown("### Segment centroid map (executive summary)")
         centroids = df_map.groupby("segment")[["pc1", "pc2"]].mean().reset_index()
         centroids["size"] = df_map["segment"].value_counts().sort_index().values
 
-        fig3 = px.scatter(
-            centroids, x="pc1", y="pc2", size="size", color="segment", text="segment",
-            title="Segment centroids on perceptual map (size-weighted)"
-        )
+        fig3 = px.scatter(centroids, x="pc1", y="pc2", size="size", color="segment", text="segment",
+                          title="Segment centroids (size-weighted)")
         fig3.update_traces(textposition="top center")
         fig3.update_layout(height=600)
         st.plotly_chart(fig3, use_container_width=True)
 
         st.caption(
-            "Insight: Centroids summarize each segment’s ‘center of gravity’ in preference space. "
-            "GTM implication: pick the centroid you want to win first, then align pricing + channel + claims to that segment."
+            "Insight: Centroids summarize each segment’s center of gravity in preference space. "
+            "GTM implication: prioritize the most attractive centroid and tailor your go-to-market accordingly."
         )
-
-    # Brand-level centroid map (if available)
-    if col_brand_buy:
-        st.markdown("### Brand-level perceptual map (centroids by most purchased brand)")
-        brand_df = df_map.copy()
-        brand_df["brand_key"] = brand_df[col_brand_buy].astype(str).str.strip()
-
-        counts = brand_df["brand_key"].value_counts()
-        keep = counts[counts >= 5].index.tolist()  # stability threshold
-        brand_df = brand_df[brand_df["brand_key"].isin(keep)].copy()
-
-        if not brand_df.empty:
-            brand_centroids = brand_df.groupby("brand_key")[["pc1", "pc2"]].mean().reset_index()
-            brand_centroids["n"] = brand_df["brand_key"].value_counts().values
-
-            fig4 = px.scatter(
-                brand_centroids, x="pc1", y="pc2", size="n", text="brand_key",
-                title="Brand centroids (only brands with ≥ 5 respondents)"
-            )
-            fig4.update_traces(textposition="top center")
-            fig4.update_layout(height=650)
-            st.plotly_chart(fig4, use_container_width=True)
-
-            st.caption(
-                "Insight: This shows which preference zones existing brands ‘own’ among their buyers. "
-                "GTM implication: position IOTA either in an under-served zone or as a sharper alternative in a crowded zone."
-            )
-        else:
-            st.info("Not enough repeated brand selections (≥5) to build a stable brand centroid map.")
 
