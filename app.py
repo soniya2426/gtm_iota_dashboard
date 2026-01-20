@@ -1,5 +1,4 @@
 
----
 
 ## 5) app.py (FULL end-to-end, with insights under every analytic)
 
@@ -532,4 +531,188 @@ elif page == "Segmentation (STP)":
 
     X = encode_for_modeling(df, seg_cols)
     Xs = StandardScaler().fit_transform(X)
+
+    km = KMeans(n_clusters=k, random_state=42, n_init=25)
+    df_seg = df.copy()
+    df_seg["segment"] = km.fit_predict(Xs)
+
+    # Save for positioning page reuse
+    st.session_state["df_seg"] = df_seg
+    st.session_state["seg_cols"] = seg_cols
+    st.session_state["k"] = k
+
+    sizes = df_seg["segment"].value_counts().sort_index().reset_index()
+    sizes.columns = ["segment", "respondents"]
+
+    c1, c2 = st.columns([0.7, 1.3])
+    c1.dataframe(sizes, use_container_width=True, height=240)
+    fig = px.bar(sizes, x="segment", y="respondents", title="Segment Size")
+    fig.update_layout(height=320)
+    c2.plotly_chart(fig, use_container_width=True)
+
+    st.caption(
+        "Insight: Segment size shows where scale lives and where niche opportunities exist. "
+        "GTM implication: pick 1–2 primary segments first; spreading the brand across all segments weakens positioning."
+    )
+
+    # Numeric profile table for selected columns
+    prof_cols = [c for c in seg_cols if pd.api.types.is_numeric_dtype(df_seg[c])]
+    if prof_cols:
+        profile = df_seg.groupby("segment")[prof_cols].mean().reset_index()
+        st.markdown("### Segment profile (numeric averages)")
+        st.dataframe(profile, use_container_width=True, height=420)
+        st.caption(
+            "Insight: Segment profiles show what each group values and how they behave. "
+            "GTM implication: translate profiles into targeted messaging (drivers) and targeted distribution (channels)."
+        )
+
+    # Download segmented file
+    with st.expander("Download segmented dataset"):
+        csv = df_seg.to_csv(index=False).encode("utf-8")
+        st.download_button("Download CSV with segment labels", csv, file_name="iota_segmented_output.csv", mime="text/csv")
+
+
+# ======================================================
+# PAGE: POSITIONING & PERCEPTUAL MAPPING (PCA + biplot + clustering overlay)
+# ======================================================
+elif page == "Positioning & Perceptual Mapping":
+    st.subheader("Positioning & Perceptual Mapping")
+
+    if not attribute_cols or len(attribute_cols) < 4:
+        st.error(
+            "Not enough attribute rating columns detected to create a strong perceptual map.\n"
+            "Make sure your dataset includes the 1–5 driver ratings like taste, source, value, etc."
+        )
+        st.stop()
+
+    st.markdown(
+        "This is a **data-driven perceptual map** using PCA over your attribute ratings. "
+        "It also includes a biplot (attribute arrows) so the axes are interpretable."
+    )
+
+    # PCA on attributes
+    attrs = df[attribute_cols].copy()
+    scaler = StandardScaler()
+    attrs_scaled = scaler.fit_transform(attrs)
+
+    pca = PCA(n_components=2, random_state=42)
+    coords = pca.fit_transform(attrs_scaled)
+
+    df_map = df.copy()
+    df_map["pc1"] = coords[:, 0]
+    df_map["pc2"] = coords[:, 1]
+
+    explained = pca.explained_variance_ratio_
+    st.caption(f"PCA variance explained: PC1={explained[0]*100:.1f}% | PC2={explained[1]*100:.1f}%")
+
+    overlay = st.checkbox("Overlay segments (KMeans) on perceptual map", value=True)
+    if overlay:
+        k = st.slider("K for overlay segmentation", 3, 8, st.session_state.get("k", 4))
+        km = KMeans(n_clusters=k, random_state=42, n_init=25)
+        df_map["segment"] = km.fit_predict(attrs_scaled)
+        color_col = "segment"
+    else:
+        color_col = None
+
+    # Consumer perceptual map
+    fig = px.scatter(
+        df_map,
+        x="pc1",
+        y="pc2",
+        color=color_col,
+        opacity=0.75,
+        title="Perceptual Map (PCA on attribute ratings)"
+    )
+    fig.update_layout(height=650, xaxis_title="Perceptual Axis 1 (PC1)", yaxis_title="Perceptual Axis 2 (PC2)")
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.caption(
+        "Insight: PCA reveals how consumers cluster across all purchase drivers simultaneously. "
+        "GTM implication: choose a target cluster and position IOTA to own that bundle of preferences."
+    )
+
+    # PCA biplot with loadings (attribute arrows)
+    st.markdown("### Biplot (What do PC1 and PC2 actually mean?)")
+    loadings = pca.components_.T  # shape: [features, pcs]
+    loading_df = pd.DataFrame(loadings, index=attribute_cols, columns=["pc1_loading", "pc2_loading"]).reset_index()
+    loading_df.rename(columns={"index": "attribute"}, inplace=True)
+
+    # Scale arrows for visibility
+    arrow_scale = st.slider("Arrow scale (for visibility)", 2, 12, 6)
+
+    fig2 = go.Figure()
+    # Add arrows
+    for _, r in loading_df.iterrows():
+        fig2.add_trace(
+            go.Scatter(
+                x=[0, r["pc1_loading"] * arrow_scale],
+                y=[0, r["pc2_loading"] * arrow_scale],
+                mode="lines+markers+text",
+                text=["", r["attribute"]],
+                textposition="top center",
+                name=r["attribute"],
+                showlegend=False
+            )
+        )
+
+    fig2.update_layout(
+        title="Attribute Loadings (Direction of each driver on the perceptual axes)",
+        height=650,
+        xaxis_title="PC1 loading",
+        yaxis_title="PC2 loading"
+    )
+    st.plotly_chart(fig2, use_container_width=True)
+
+    st.caption(
+        "Insight: Arrow directions show which attributes define the perceptual axes. "
+        "GTM implication: if your target segment is strong along certain arrows, those should dominate your messaging and packaging cues."
+    )
+
+    # Segment centroid map (if clustering enabled)
+    if overlay and "segment" in df_map.columns:
+        st.markdown("### Segment centroid map (executive-friendly)")
+        centroids = df_map.groupby("segment")[["pc1", "pc2"]].mean().reset_index()
+        centroids["size"] = df_map["segment"].value_counts().sort_index().values
+
+        fig3 = px.scatter(
+            centroids, x="pc1", y="pc2", size="size", color="segment", text="segment",
+            title="Segment centroids on perceptual map (size-weighted)"
+        )
+        fig3.update_traces(textposition="top center")
+        fig3.update_layout(height=600)
+        st.plotly_chart(fig3, use_container_width=True)
+
+        st.caption(
+            "Insight: Centroids summarize each segment’s ‘center of gravity’ in preference space. "
+            "GTM implication: pick the centroid you want to win first, then align pricing + channel + claims to that segment."
+        )
+
+    # Brand-level centroid map (if available)
+    if col_brand_buy:
+        st.markdown("### Brand-level perceptual map (centroids by most purchased brand)")
+        brand_df = df_map.copy()
+        brand_df["brand_key"] = brand_df[col_brand_buy].astype(str).str.strip()
+
+        counts = brand_df["brand_key"].value_counts()
+        keep = counts[counts >= 5].index.tolist()  # stability threshold
+        brand_df = brand_df[brand_df["brand_key"].isin(keep)].copy()
+
+        if not brand_df.empty:
+            brand_centroids = brand_df.groupby("brand_key")[["pc1", "pc2"]].mean().reset_index()
+            brand_centroids["n"] = brand_df["brand_key"].value_counts().values
+
+            fig4 = px.scatter(
+                brand_centroids, x="pc1", y="pc2", size="n", text="brand_key",
+                title="Brand centroids (only brands with ≥ 5 respondents)"
+            )
+            fig4.update_traces(textposition="top center")
+            fig4.update_layout(height=650)
+            st.plotly_chart(fig4, use_container_width=True)
+
+            st.caption(
+                "Insight: This shows which preference zones existing brands ‘own’ among their buyers. "
+                "GTM implication: position IOTA either in an under-served zone or as a sharper alternative in a crowded zone."
+            )
+        else:
+            st.info("Not enough repeated brand selections (≥5) to build a stable brand centroid map.")
 
