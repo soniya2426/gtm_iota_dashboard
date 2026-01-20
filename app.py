@@ -469,10 +469,12 @@ results["coef"] = results["coef"].round(3)
 results["p_value"] = results["p_value"].round(3)
 
 
-    c1, c2 = st.columns([1.25, 0.75])
-    c1.dataframe(results.head(60), use_container_width=True, height=520)
-    c2.metric("R-squared", f"{model.rsquared:.3f}")
-    c2.metric("Observations", f"{len(model_df):,}")
+c1, c2 = st.columns([1.25, 0.75])
+
+c1.dataframe(results.head(60), use_container_width=True, height=520)
+c2.metric("R-squared", f"{model.rsquared:.3f}")
+c2.metric("Observations", f"{len(model_df):,}")
+
 
     sig = results[(results["feature"] != "const") & (results["p_value"] < 0.05)].head(8)
     c2.markdown("**Top significant drivers (p < 0.05):**")
