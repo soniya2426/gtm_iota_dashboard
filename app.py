@@ -459,10 +459,15 @@ elif page == "Regression":
     model = sm.OLS(y, X).fit()
 
     results = pd.DataFrame({
-        "feature": model.params.index,
-        "coef": model.params.values,
-        "p_value": model.pvalues.values
-    }).sort_values("p_value")
+    "feature": model.params.index,
+    "coef": model.params.values,
+    "p_value": model.pvalues.values
+}).sort_values("p_value")
+
+
+results["coef"] = results["coef"].round(3)
+results["p_value"] = results["p_value"].round(3)
+
 
     c1, c2 = st.columns([1.25, 0.75])
     c1.dataframe(results.head(60), use_container_width=True, height=520)
